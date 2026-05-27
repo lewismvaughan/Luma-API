@@ -1,5 +1,6 @@
 import { query, transaction } from '../../db';
 import { logger } from '../../utils/logger';
+import { runLeaderTask } from './leader-lock';
 import { stripeService } from '../stripe';
 import { socketService, SocketEvents } from '../socket';
 import { sendTemplatedEmail } from '../email/template-sender';
@@ -188,13 +189,18 @@ async function processPayoutForUser(userId: string, _totalAmount: number, curren
 // --- Start / Stop ---
 
 export function startReferralPayouts() {
-  // Run once immediately on startup
-  markMaturedEarnings();
-  processReferralPayouts();
+  // Each tick runs on only one replica (Redis leader lock) so Stripe transfers
+  // aren't issued N times. 10-min TTL covers replica tick-spread, well under 1h.
+  const markTick = () => runLeaderTask('referral:mark-matured', 600, markMaturedEarnings);
+  const payoutTick = () => runLeaderTask('referral:process-payouts', 600, processReferralPayouts);
+
+  // Run once shortly after startup (still guarded by the leader lock).
+  markTick();
+  payoutTick();
 
   intervals.push(
-    setInterval(markMaturedEarnings, ONE_HOUR),
-    setInterval(processReferralPayouts, ONE_HOUR),
+    setInterval(markTick, ONE_HOUR),
+    setInterval(payoutTick, ONE_HOUR),
   );
 
   logger.info('Referral payout scheduler started', {

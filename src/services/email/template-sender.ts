@@ -245,13 +245,12 @@ Click the button below to access your dashboard and start exploring. You can als
   });
 }
 
-export async function sendPasswordResetEmail(to: string, resetTokenId: string): Promise<void> {
-  const resetUrl = `${config.email.dashboardUrl}/reset-password?token=${resetTokenId}`;
-  
+export async function sendPasswordResetEmail(to: string, resetToken: string): Promise<void> {
+  const resetUrl = `${config.email.dashboardUrl}/reset-password?token=${resetToken}`;
+
+  // Never log the token or the full reset URL — they are the reset secret.
   logger.info('Preparing password reset email', {
     to,
-    resetTokenId,
-    resetUrl,
     dashboardUrl: config.email.dashboardUrl,
     defaultFrom: config.email.defaultFrom
   });

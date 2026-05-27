@@ -8,20 +8,21 @@ import { getOrgCurrency, toSmallestUnit, fromSmallestUnit } from '../utils/curre
 import { randomBytes } from 'crypto';
 import { queueService, QueueName } from '../services/queue';
 import { getImageUrl } from '../services/images';
+import { getClientIpOrNull } from '../utils/client-ip';
+import { publicPreorderRateLimit } from '../middleware/rate-limit';
 
 const app = new OpenAPIHono();
 
+// Public preorder creation is unauthenticated and writes to the DB + Stripe —
+// rate-limit it (CGNAT-safe per-session cap + per-IP backstop).
+app.use('/menu/public/:slug/preorder', publicPreorderRateLimit);
+
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
-function getClientIp(c: any): string | null {
-  const xForwardedFor = c.req.header('x-forwarded-for');
-  if (xForwardedFor) {
-    return xForwardedFor.split(',')[0].trim();
-  }
-  const xRealIp = c.req.header('x-real-ip');
-  if (xRealIp) return xRealIp;
-  return null;
-}
+// Shared, TRUST_PROXY-aware client IP. Returns null for the fraud-tracking
+// customer_ip column when the address can't be resolved (avoids storing the
+// literal 'unknown'). Spoof-resistant — see utils/client-ip.
+const getClientIp = getClientIpOrNull;
 
 function generateOrderNumber(): string {
   const date = new Date();

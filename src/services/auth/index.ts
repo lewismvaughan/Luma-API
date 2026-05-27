@@ -272,7 +272,16 @@ export class AuthService {
         if (!user) {
           throw new Error('User not found');
         }
-        
+
+        // Reject deactivated/disabled accounts on every request. Without this a
+        // user whose access was revoked (staff disabled, subscription lapse,
+        // pending account deletion) keeps full API access until their Cognito
+        // token expires. This is the central gate for all routes, which each
+        // call verifyToken via their own verifyAuth helper.
+        if (user.is_active === false) {
+          throw new Error('Account is not active');
+        }
+
         return {
           userId: user.id,
           email: cognitoPayload.email,
@@ -489,7 +498,10 @@ export class AuthService {
       return null;
     }
 
-    // Generate a secure random token
+    // Generate a secure random token. The RAW token is what we email; only its
+    // SHA-256 hash is stored, and lookups are by hash — so the secret never
+    // lives in the DB or logs. (Previously the row's UUID id was emailed/used,
+    // which is logged and is the primary key, not a secret.)
     const tokenId = crypto.randomUUID();
     const rawToken = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
@@ -505,32 +517,33 @@ export class AuthService {
       [tokenId, user.id, tokenHash, expiresAt]
     );
 
-    logger.info('Password reset token created', { 
-      userId: user.id, 
+    logger.info('Password reset token created', {
+      userId: user.id,
       email: normalized,
-      tokenId,
-      expiresAt 
+      tokenId, // internal PK only — NOT the emailed secret
+      expiresAt,
     });
 
-    // Return the token ID (not the raw token)
-    return tokenId;
+    // Return the raw secret token (emailed to the user); never logged.
+    return rawToken;
   }
 
-  async validatePasswordResetToken(tokenId: string): Promise<User | null> {
+  async validatePasswordResetToken(rawToken: string): Promise<User | null> {
     try {
-      // Find the token
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      // Find the token by its hash (constant lookup; the raw secret is never stored)
       const tokenResult = await query<any>(
-        `SELECT prt.*, u.* 
+        `SELECT prt.*, u.*
          FROM password_reset_tokens prt
          JOIN users u ON prt.user_id = u.id
-         WHERE prt.id = $1 
-           AND prt.used_at IS NULL 
+         WHERE prt.token_hash = $1
+           AND prt.used_at IS NULL
            AND prt.expires_at > NOW()`,
-        [tokenId]
+        [tokenHash]
       );
 
       if (tokenResult.length === 0) {
-        logger.warn('Invalid or expired password reset token', { tokenId });
+        logger.warn('Invalid or expired password reset token');
         return null;
       }
 
@@ -551,43 +564,45 @@ export class AuthService {
 
       return user;
     } catch (error) {
-      logger.error('Failed to validate password reset token', { error, tokenId });
+      logger.error('Failed to validate password reset token', { error });
       return null;
     }
   }
 
-  async resetPassword(tokenId: string, newPassword: string): Promise<boolean> {
+  async resetPassword(rawToken: string, newPassword: string): Promise<boolean> {
     try {
       // Validate token and get user
-      const user = await this.validatePasswordResetToken(tokenId);
-      
+      const user = await this.validatePasswordResetToken(rawToken);
+
       if (!user) {
         return false;
       }
 
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
       // Set the new password
       await this.setNewPassword(user.id, newPassword);
 
-      // Mark token as used
+      // Mark this token as used (by hash)
       await query(
-        `UPDATE password_reset_tokens 
-         SET used_at = NOW() 
-         WHERE id = $1`,
-        [tokenId]
+        `UPDATE password_reset_tokens
+         SET used_at = NOW()
+         WHERE token_hash = $1`,
+        [tokenHash]
       );
 
-      // Invalidate all other reset tokens for this user
+      // Invalidate all other outstanding reset tokens for this user
       await query(
-        `UPDATE password_reset_tokens 
-         SET used_at = NOW() 
-         WHERE user_id = $1 AND id != $2 AND used_at IS NULL`,
-        [user.id, tokenId]
+        `UPDATE password_reset_tokens
+         SET used_at = NOW()
+         WHERE user_id = $1 AND token_hash != $2 AND used_at IS NULL`,
+        [user.id, tokenHash]
       );
 
-      logger.info('Password reset successful', { userId: user.id, tokenId });
+      logger.info('Password reset successful', { userId: user.id });
       return true;
     } catch (error) {
-      logger.error('Failed to reset password', { error, tokenId });
+      logger.error('Failed to reset password', { error });
       return false;
     }
   }

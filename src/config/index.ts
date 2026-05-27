@@ -12,6 +12,7 @@ const envSchema = z.object({
   
   DATABASE_URL: z.string(),
   DB_SSL: z.string().transform(v => v === 'true').default('false'),
+  PG_POOL_MAX: z.string().transform(Number).default('25'), // per-replica pool cap; N replicas × this must stay under Postgres max_connections
   
   REDIS_URL: z.string().default('redis://localhost:6379'),
   
@@ -59,6 +60,7 @@ const envSchema = z.object({
   // Google Play Billing
   GOOGLE_PLAY_PACKAGE_NAME: z.string().optional(),
   GOOGLE_PLAY_CREDENTIALS: z.string().optional(), // JSON string of service account credentials
+  GOOGLE_PUBSUB_VERIFICATION_TOKEN: z.string().optional(), // shared secret for the Pub/Sub push endpoint (?token=)
 
   // Apple Wallet
   APPLE_WALLET_PASS_TYPE_ID: z.string().optional(),
@@ -94,6 +96,7 @@ export const config = {
   database: {
     url: env.DATABASE_URL,
     ssl: env.DB_SSL,
+    poolMax: env.PG_POOL_MAX,
   },
   redis: {
     url: env.REDIS_URL,
@@ -154,6 +157,10 @@ export const config = {
   googlePlay: {
     packageName: env.GOOGLE_PLAY_PACKAGE_NAME,
     credentials: env.GOOGLE_PLAY_CREDENTIALS,
+    // Shared secret appended to the Pub/Sub push endpoint URL
+    // (?token=...). When set, the Google webhook rejects requests that don't
+    // present it — closes the unauthenticated-push hole.
+    pubsubVerificationToken: env.GOOGLE_PUBSUB_VERIFICATION_TOKEN,
   },
   appleWallet: {
     passTypeId: env.APPLE_WALLET_PASS_TYPE_ID,

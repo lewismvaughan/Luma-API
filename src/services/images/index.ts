@@ -46,6 +46,24 @@ function createError(message: string, code: ImageServiceError['code']): ImageSer
   return error;
 }
 
+// Image IDs are server-generated (`img_<ts>_<hex>`). Anything a caller passes
+// back to address a file MUST match that shape — never a path. This guards
+// every fs operation (delete, exists, duplicate, read) against traversal like
+// `../../etc/passwd` regardless of which route reached it.
+const SAFE_IMAGE_ID = /^[A-Za-z0-9_.-]+$/;
+function assertSafeImageId(imageId: string): void {
+  if (
+    !imageId ||
+    imageId.length > 256 ||
+    imageId.includes('..') ||
+    imageId.includes('/') ||
+    imageId.includes('\\') ||
+    !SAFE_IMAGE_ID.test(imageId)
+  ) {
+    throw createError('Invalid image ID', 'NOT_FOUND');
+  }
+}
+
 /**
  * Generates a unique image ID using timestamp and random bytes
  */
@@ -242,6 +260,7 @@ export async function uploadImage(
  * Deletes an image from storage
  */
 export async function deleteImage(imageId: string): Promise<boolean> {
+  assertSafeImageId(imageId);
   const filePath = path.join(IMAGE_STORAGE_PATH, imageId);
 
   try {
@@ -262,6 +281,7 @@ export async function deleteImage(imageId: string): Promise<boolean> {
  * Checks if an image exists
  */
 export async function imageExists(imageId: string): Promise<boolean> {
+  assertSafeImageId(imageId);
   const filePath = path.join(IMAGE_STORAGE_PATH, imageId);
 
   try {
@@ -297,6 +317,7 @@ export function isImageServerConfigured(): boolean {
  * Used when duplicating products/catalogs
  */
 export async function duplicateImage(existingImageId: string): Promise<UploadResult | null> {
+  assertSafeImageId(existingImageId);
   const existingPath = path.join(IMAGE_STORAGE_PATH, existingImageId);
 
   try {

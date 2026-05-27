@@ -941,6 +941,10 @@ const voidInvoiceRoute = createRoute({
 app.openapi(voidInvoiceRoute, async (c) => {
   try {
     const payload = await verifyAuth(c.req.header('Authorization'));
+    // Voiding is a money-moving action — restrict to owner/admin, not every staff user.
+    if (payload.role !== 'owner' && payload.role !== 'admin') {
+      return c.json({ error: 'Only an owner or admin can void invoices', code: 'FORBIDDEN' }, 403);
+    }
     const sub = await requirePro(payload.organizationId);
     if (!sub) {
       return c.json({ error: 'Invoicing requires a Pro subscription', code: 'PRO_REQUIRED' }, 403);
@@ -1298,6 +1302,10 @@ const refundInvoiceRoute = createRoute({
 app.openapi(refundInvoiceRoute, async (c) => {
   try {
     const payload = await verifyAuth(c.req.header('Authorization'));
+    // Refunds move money — restrict to owner/admin, not every staff user.
+    if (payload.role !== 'owner' && payload.role !== 'admin') {
+      return c.json({ error: 'Only an owner or admin can refund invoices', code: 'FORBIDDEN' }, 403);
+    }
     const sub = await requirePro(payload.organizationId);
     if (!sub) {
       return c.json({ error: 'Invoicing requires a Pro subscription', code: 'PRO_REQUIRED' }, 403);

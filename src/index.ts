@@ -3,6 +3,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { prettyJSON } from 'hono/pretty-json';
+import { secureHeaders } from 'hono/secure-headers';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { swaggerUI } from '@hono/swagger-ui';
 import { config } from './config';
@@ -89,6 +90,10 @@ app.use('*', async (c, next) => {
   return logger()(c, next);
 });
 app.use('*', requestId());
+// Baseline security headers (HSTS, X-Content-Type-Options: nosniff,
+// X-Frame-Options, Referrer-Policy, etc.). Safe for a JSON API — no CSP that
+// could break the separate Next.js frontends, which serve their own headers.
+app.use('*', secureHeaders());
 // Debug CORS
 const corsOrigins = config.cors.origin.split(',').map(origin => origin.trim());
 winstonLogger.info('CORS Origins configured:', corsOrigins);
@@ -189,6 +194,9 @@ app.onError(errorHandler);
 
 const port = config.server.port;
 
+// Module-scoped so gracefulShutdown can close it and drain in-flight requests.
+let server: ReturnType<typeof serve> | undefined;
+
 async function startServer() {
   try {
     await testConnection();
@@ -200,7 +208,7 @@ async function startServer() {
     startAccountDeletionJob();
 
     // Create HTTP server and initialize Socket.IO
-    const server = serve({
+    server = serve({
       fetch: app.fetch,
       port,
     });
@@ -222,6 +230,18 @@ startServer();
 async function gracefulShutdown(signal: string) {
   winstonLogger.info(`${signal} received, starting graceful shutdown...`);
   try {
+    // Stop accepting new HTTP connections and let in-flight requests finish
+    // before tearing down the DB pool / Redis (prevents dropped requests on
+    // every rolling deploy).
+    if (server) {
+      await new Promise<void>((resolve) => {
+        server!.close(() => resolve());
+        // Safety timeout so a hung keep-alive connection can't block shutdown
+        // past the pod's terminationGracePeriod.
+        setTimeout(resolve, 10000).unref();
+      });
+    }
+    await socketService.close();
     stopScheduledCleanups();
     stopReferralPayouts();
     stopAccountDeletionJob();

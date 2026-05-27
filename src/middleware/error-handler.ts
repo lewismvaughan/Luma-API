@@ -4,12 +4,24 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { logApiError } from '../services/error-logging';
 
+// Stripe errors (and some AWS SDK errors) carry the full HTTP response — raw
+// body, headers (request-ids) and an echo of submitted params (amounts,
+// customer/payment-method ids, emails). Logging the whole object leaks that
+// into our logs; keep only safe, useful fields.
+function safeError(err: any) {
+  const base = { name: err?.name, message: err?.message, stack: err?.stack };
+  if (err?.type || err?.requestId || err?.statusCode || err?.code) {
+    return { ...base, code: err.code, type: err.type, statusCode: err.statusCode, requestId: err.requestId };
+  }
+  return base;
+}
+
 export const errorHandler: ErrorHandler = (err, c) => {
   const requestId = c.get('requestId');
 
   logger.error({
     message: err.message,
-    error: err,
+    error: safeError(err),
     requestId,
     path: c.req.path,
     method: c.req.method,

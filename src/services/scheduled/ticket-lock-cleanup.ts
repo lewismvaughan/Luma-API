@@ -1,5 +1,6 @@
 import { query } from '../../db';
 import { logger } from '../../utils/logger';
+import { runLeaderTask } from './leader-lock';
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
@@ -67,15 +68,20 @@ async function cleanPasswordResetTokens() {
 // --- Start / Stop ---
 
 export function startScheduledCleanups() {
-  // Run all once immediately on startup
-  cleanExpiredTicketLocks();
-  cleanExpiredSessions();
-  cleanPasswordResetTokens();
+  // One replica per tick (Redis leader lock) to avoid N× redundant cleanups.
+  const ticketLocksTick = () => runLeaderTask('cleanup:ticket-locks', 300, cleanExpiredTicketLocks);
+  const sessionsTick = () => runLeaderTask('cleanup:sessions', 600, cleanExpiredSessions);
+  const resetTokensTick = () => runLeaderTask('cleanup:reset-tokens', 600, cleanPasswordResetTokens);
+
+  // Run all once immediately on startup (still leader-guarded)
+  ticketLocksTick();
+  sessionsTick();
+  resetTokensTick();
 
   intervals.push(
-    setInterval(cleanExpiredTicketLocks, FIFTEEN_MINUTES),
-    setInterval(cleanExpiredSessions, ONE_HOUR),
-    setInterval(cleanPasswordResetTokens, ONE_HOUR),
+    setInterval(ticketLocksTick, FIFTEEN_MINUTES),
+    setInterval(sessionsTick, ONE_HOUR),
+    setInterval(resetTokensTick, ONE_HOUR),
   );
 
   logger.info('Scheduled cleanups started', {

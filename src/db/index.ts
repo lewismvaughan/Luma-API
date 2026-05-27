@@ -5,7 +5,9 @@ import { logger } from '../utils/logger';
 export const pool = new Pool({
   connectionString: config.database.url,
   ssl: config.database.ssl ? { rejectUnauthorized: false } : false,
-  max: 50,
+  // Per-replica cap (PG_POOL_MAX, default 25). Keep N_replicas × max under
+  // Postgres max_connections (default 100) — e.g. 2 replicas × 25 = 50.
+  max: config.database.poolMax,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
 });

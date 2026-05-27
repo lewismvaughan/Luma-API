@@ -1027,24 +1027,24 @@ app.openapi(forgotPasswordRoute, async (c) => {
   const validated = ForgotPasswordRequestSchema.parse(body);
 
   try {
-    // Create password reset token (returns null if user doesn't exist)
-    const tokenId = await authService.createPasswordResetToken(validated.email);
-    
+    // Create password reset token (returns null if user doesn't exist).
+    // This is the raw secret — never log it.
+    const resetToken = await authService.createPasswordResetToken(validated.email);
+
     logger.info('Password reset token creation result', {
       email: validated.email,
-      tokenCreated: !!tokenId,
-      tokenId
+      tokenCreated: !!resetToken,
     });
-    
-    if (tokenId) {
+
+    if (resetToken) {
       // Send password reset email
-      await sendPasswordResetEmail(validated.email, tokenId);
+      await sendPasswordResetEmail(validated.email, resetToken);
     }
     
     // Always return success to prevent email enumeration
-    logger.info('Password reset requested', { 
-      email: validated.email, 
-      tokenCreated: !!tokenId 
+    logger.info('Password reset requested', {
+      email: validated.email,
+      tokenCreated: !!resetToken
     });
     
     return c.json({ 
@@ -1062,7 +1062,7 @@ app.openapi(forgotPasswordRoute, async (c) => {
 
 // Reset password endpoint
 const ResetPasswordRequestSchema = z.object({
-  token: z.string().uuid(),
+  token: z.string().regex(/^[a-f0-9]{64}$/i, 'Invalid token'),
   password: z.string().min(8).regex(
     /^(?=.*[0-9])(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?])(?=.*[a-z])(?=.*[A-Z]).+$/,
     'Password must contain at least 1 number, 1 special character, 1 uppercase letter, and 1 lowercase letter'
@@ -1113,13 +1113,13 @@ app.openapi(resetPasswordRoute, async (c) => {
       }, 400);
     }
     
-    logger.info('Password reset completed', { tokenId: validated.token });
-    
-    return c.json({ 
-      message: 'Password has been reset successfully' 
+    logger.info('Password reset completed');
+
+    return c.json({
+      message: 'Password has been reset successfully'
     });
   } catch (error: any) {
-    logger.error('Reset password error', { error, token: validated.token });
+    logger.error('Reset password error', { error });
     
     if (error.issues) {
       return c.json({ 
@@ -1136,7 +1136,7 @@ app.openapi(resetPasswordRoute, async (c) => {
 
 // Validate reset token endpoint (optional - for frontend to check if token is valid)
 const ValidateResetTokenRequestSchema = z.object({
-  token: z.string().uuid(),
+  token: z.string().regex(/^[a-f0-9]{64}$/i, 'Invalid token'),
 });
 
 const validateResetTokenRoute = createRoute({
@@ -1180,7 +1180,7 @@ app.openapi(validateResetTokenRoute, async (c) => {
       email: user?.email
     });
   } catch (error) {
-    logger.error('Validate reset token error', { error, token: validated.token });
+    logger.error('Validate reset token error', { error });
 
     return c.json({
       valid: false

@@ -6,6 +6,7 @@ import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { authService } from '../auth';
 import { cacheService, CacheKeys } from '../redis/cache';
+import { query } from '../../db';
 
 export interface SocketUser {
   userId: string;
@@ -144,7 +145,23 @@ export class SocketService {
         joinedRooms: [orgRoom, userRoom],
       });
 
-      socket.on('join:event', (eventId: string) => {
+      socket.on('join:event', async (eventId: string) => {
+        // Only allow joining an event room the caller's org owns — otherwise a
+        // logged-in user from org A could subscribe to org B's realtime
+        // ticket/order events by supplying B's event UUID (cross-org leak).
+        try {
+          const rows = await query(
+            `SELECT id FROM events WHERE id = $1 AND organization_id = $2`,
+            [eventId, user.organizationId]
+          );
+          if (rows.length === 0) {
+            logger.warn('Socket join:event denied (not owner)', { socketId: socket.id, eventId, organizationId: user.organizationId });
+            return;
+          }
+        } catch (error) {
+          logger.error('Socket join:event ownership check failed', { error, eventId });
+          return;
+        }
         socket.join(`event:${eventId}`);
         logger.debug('Socket joined event', { socketId: socket.id, eventId });
       });
@@ -154,8 +171,23 @@ export class SocketService {
         logger.debug('Socket left event', { socketId: socket.id, eventId });
       });
 
-      // Device room support - allows emitting to specific devices
-      socket.on('join:device', (deviceId: string) => {
+      // Device room support - allows emitting to specific devices. Only join a
+      // device room registered to the caller's organization.
+      socket.on('join:device', async (deviceId: string) => {
+        try {
+          const rows = await query<{ tap_to_pay_device_ids: string[] | null }>(
+            `SELECT tap_to_pay_device_ids FROM organizations WHERE id = $1`,
+            [user.organizationId]
+          );
+          const ids = rows[0]?.tap_to_pay_device_ids || [];
+          if (!Array.isArray(ids) || !ids.includes(deviceId)) {
+            logger.warn('Socket join:device denied (not owner)', { socketId: socket.id, deviceId, organizationId: user.organizationId });
+            return;
+          }
+        } catch (error) {
+          logger.error('Socket join:device ownership check failed', { error, deviceId });
+          return;
+        }
         socket.join(`device:${deviceId}`);
         logger.debug('Socket joined device room', { socketId: socket.id, deviceId });
       });
@@ -165,33 +197,16 @@ export class SocketService {
         logger.debug('Socket left device room', { socketId: socket.id, deviceId });
       });
 
-      socket.on('order:update', async (data: any) => {
-        await this.handleOrderUpdate(socket, data);
-      });
+      // NOTE: the client-emitted 'order:update' handler was removed — it let a
+      // client rebroadcast an arbitrary order/status to any event room with no
+      // ownership check or persistence. Order status changes now originate only
+      // from authenticated REST handlers, which emit the canonical event.
 
       socket.on('disconnect', () => {
         this.connectedUsers.delete(socket.id);
         logger.info('Socket disconnected', { socketId: socket.id });
       });
     });
-  }
-
-  private async handleOrderUpdate(socket: any, data: any) {
-    const user = socket.data.user as SocketUser;
-    logger.debug('Order update received', {
-      userId: user.userId,
-      orderId: data.orderId,
-      status: data.status,
-    });
-
-    if (data.eventId) {
-      this.emitToEvent(data.eventId, 'order:updated', {
-        orderId: data.orderId,
-        status: data.status,
-        updatedBy: user.userId,
-        timestamp: new Date(),
-      });
-    }
   }
 
   emitToOrganization(organizationId: string, event: string, data: any) {
@@ -236,11 +251,12 @@ export class SocketService {
 
   emitToEvent(eventId: string, event: string, data: any) {
     if (!this.io) return;
-    // Emit to authenticated clients in event room
+    // Emit to authenticated clients in the event room
     this.io.to(`event:${eventId}`).emit(event, data);
-    // Also emit to public namespace for marketing site viewers
+    // And to public-namespace viewers tracking THIS specific event. The former
+    // blanket emit to the global 'events:public' room was removed — it fanned
+    // every org's event/order updates out to every anonymous connected client.
     this.io.of('/public').to(`event:${eventId}`).emit(event, data);
-    this.io.of('/public').to('events:public').emit(event, data);
     logger.debug('Emitted to event', { eventId, event });
   }
 
@@ -307,6 +323,15 @@ export class SocketService {
         socket.disconnect(true);
       }
     }
+  }
+
+  /** Close the Socket.IO server (and its Redis adapter clients) on shutdown. */
+  async close(): Promise<void> {
+    if (!this.io) return;
+    await new Promise<void>((resolve) => {
+      this.io!.close(() => resolve());
+    });
+    this.io = null;
   }
 }
 

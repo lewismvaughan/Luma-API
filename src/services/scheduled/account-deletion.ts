@@ -1,5 +1,6 @@
 import { query } from '../../db';
 import { logger } from '../../utils/logger';
+import { runLeaderTask } from './leader-lock';
 import { cognitoService } from '../auth/cognito';
 import { emailService } from '../email';
 import { cacheService, CacheKeys } from '../redis/cache';
@@ -252,14 +253,19 @@ async function processAccountDeletions() {
 }
 
 export function startAccountDeletionJob() {
-  // Run once on startup
-  sendDeletionReminders();
-  processAccountDeletions();
+  // One replica per tick (Redis leader lock) — otherwise every replica issues
+  // the Stripe cancel/reject + deletion emails. 30-min TTL, well under 6h.
+  const reminderTick = () => runLeaderTask('acct:deletion-reminders', 1800, sendDeletionReminders);
+  const deletionTick = () => runLeaderTask('acct:process-deletions', 1800, processAccountDeletions);
+
+  // Run once on startup (still leader-guarded)
+  reminderTick();
+  deletionTick();
 
   // Then every 6 hours
   intervals.push(
-    setInterval(sendDeletionReminders, SIX_HOURS),
-    setInterval(processAccountDeletions, SIX_HOURS),
+    setInterval(reminderTick, SIX_HOURS),
+    setInterval(deletionTick, SIX_HOURS),
   );
 
   logger.info('Account deletion job started', { interval: '6h', reminders: '6h' });

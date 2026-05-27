@@ -1924,6 +1924,14 @@ app.openapi(updateTierRoute, async (c) => {
     const payload = await verifyAuth(c.req.header('Authorization'));
     const body = await c.req.json();
 
+    // Verify the event belongs to the caller's organization before touching its
+    // tiers — otherwise any token could edit another org's tier by UUID (IDOR).
+    const ownEvent = await query(
+      `SELECT id FROM events WHERE id = $1 AND organization_id = $2`,
+      [id, payload.organizationId]
+    );
+    if (ownEvent.length === 0) return c.json({ error: 'Event not found' }, 404);
+
     // Check updated fields for profanity
     const profanityField = checkFieldsForProfanity({ name: body.name, description: body.description });
     if (profanityField) {
@@ -1993,6 +2001,14 @@ app.openapi(deleteTierRoute, async (c) => {
   const { id, tierId } = c.req.param();
   try {
     const payload = await verifyAuth(c.req.header('Authorization'));
+
+    // Verify the event belongs to the caller's organization (prevents IDOR via
+    // another org's event/tier UUIDs).
+    const ownEvent = await query(
+      `SELECT id FROM events WHERE id = $1 AND organization_id = $2`,
+      [id, payload.organizationId]
+    );
+    if (ownEvent.length === 0) return c.json({ error: 'Event not found' }, 404);
 
     const ticketCount = await query<{ count: string }>(
       `SELECT COUNT(*) as count FROM tickets WHERE ticket_tier_id = $1 AND status != 'cancelled'`,

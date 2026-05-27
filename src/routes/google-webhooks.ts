@@ -250,6 +250,20 @@ app.post('/google/webhook', async (c) => {
   const rawBody = await c.req.text();
   const isProd = config.env === 'production';
 
+  // Authenticate the Pub/Sub push request via the shared token appended to the
+  // subscription's push endpoint URL (?token=...). Enforced only when the token
+  // is configured, so enabling it is a deliberate step (set the env AND add the
+  // token to the Pub/Sub subscription) that won't silently break billing sync.
+  const expectedToken = config.googlePlay.pubsubVerificationToken;
+  if (expectedToken) {
+    if (c.req.query('token') !== expectedToken) {
+      logger.warn('[GoogleWebhook] Rejected: missing/invalid verification token');
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+  } else if (isProd) {
+    logger.warn('[GoogleWebhook] GOOGLE_PUBSUB_VERIFICATION_TOKEN not set — endpoint is UNAUTHENTICATED. Set it and add ?token= to the Pub/Sub push URL.');
+  }
+
   logger.info('[GoogleWebhook] ========== NOTIFICATION RECEIVED ==========');
   logger.info('[GoogleWebhook] Environment', {
     env: config.env,

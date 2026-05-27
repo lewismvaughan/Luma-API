@@ -1,12 +1,26 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { query } from './index';
+import { pool, query } from './index';
 import { logger } from '../utils/logger';
 
+// Constant key for the Postgres session-level advisory lock that serialises
+// migrations. When several API replicas boot at once (rolling update) they all
+// call runMigrations(); without a lock two pods can see the same file as un-run
+// and execute the same DDL concurrently → duplicate/partial migrations and
+// crash-looping pods. The lock makes the second pod wait, after which it sees
+// the migrations already recorded and does nothing.
+const MIGRATION_ADVISORY_LOCK_KEY = 778421; // arbitrary, stable across deploys
+
 export async function runMigrations() {
+  // Hold the advisory lock on a single dedicated connection for the whole run.
+  // pg_advisory_lock is session-scoped, so lock+unlock must happen on the same
+  // client — not via the pooled query() helper, which may switch connections.
+  const client = await pool.connect();
   try {
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_ADVISORY_LOCK_KEY]);
+
     // Create migrations table if it doesn't exist
-    await query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS migrations (
         id SERIAL PRIMARY KEY,
         filename VARCHAR(255) UNIQUE NOT NULL,
@@ -22,24 +36,24 @@ export async function runMigrations() {
 
     for (const file of migrationFiles) {
       // Check if migration has already been run
-      const result = await query(
+      const result = await client.query(
         'SELECT id FROM migrations WHERE filename = $1',
         [file]
       );
 
-      if (result.length === 0) {
+      if (result.rows.length === 0) {
         logger.info(`Running migration: ${file}`);
-        
+
         // Read and execute migration
         const sql = readFileSync(join(migrationsDir, file), 'utf8');
-        await query(sql);
-        
+        await client.query(sql);
+
         // Record migration as completed
-        await query(
+        await client.query(
           'INSERT INTO migrations (filename) VALUES ($1)',
           [file]
         );
-        
+
         logger.info(`Migration completed: ${file}`);
       } else {
         logger.info(`Migration already executed: ${file}`);
@@ -50,6 +64,13 @@ export async function runMigrations() {
   } catch (error) {
     logger.error('Migration failed:', error);
     throw error;
+  } finally {
+    try {
+      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_KEY]);
+    } catch (unlockError) {
+      logger.warn('Failed to release migration advisory lock (auto-released on disconnect)', { unlockError });
+    }
+    client.release();
   }
 }
 

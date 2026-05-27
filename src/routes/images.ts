@@ -183,6 +183,12 @@ const deleteImageRoute = createRoute({
 app.openapi(deleteImageRoute, async (c) => {
   const { imageId } = c.req.param();
 
+  // Reject path-traversal in the id before touching the filesystem (mirrors
+  // the GET route; the image service also guards, this returns a clean 400).
+  if (imageId.includes('..') || imageId.includes('/') || imageId.includes('\\')) {
+    return c.json({ error: 'Invalid image ID' }, 400);
+  }
+
   try {
     await verifyAuth(c.req.header('Authorization'));
 
