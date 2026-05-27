@@ -2133,6 +2133,10 @@ app.openapi(refundTicketRoute, async (c) => {
   const { eventId, ticketId } = c.req.param();
   try {
     const payload = await verifyAuth(c.req.header('Authorization'));
+    // Refunds move money — restrict to owner/admin (matches invoice refund).
+    if (payload.role !== 'owner' && payload.role !== 'admin') {
+      return c.json({ error: 'Only an owner or admin can refund tickets', code: 'FORBIDDEN' }, 403);
+    }
     const body = await c.req.json();
 
     // Fetch ticket with event details

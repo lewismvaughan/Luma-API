@@ -600,6 +600,22 @@ class TipsService {
       throw new Error('Cannot modify members of a finalized tip pool');
     }
 
+    // Only allow members that belong to this organization — otherwise a
+    // caller could inject arbitrary user UUIDs and leak those users' name/
+    // avatar via the pool detail (cross-org PII).
+    if (members.length > 0) {
+      const ids = members.map(m => m.userId);
+      const valid = await query<{ id: string }>(
+        'SELECT id FROM users WHERE id = ANY($1) AND organization_id = $2',
+        [ids, organizationId]
+      );
+      const validIds = new Set(valid.map(r => r.id));
+      const foreign = ids.filter(id => !validIds.has(id));
+      if (foreign.length > 0) {
+        throw new Error('One or more members do not belong to this organization');
+      }
+    }
+
     // Use upsert for each member
     for (const member of members) {
       await query(

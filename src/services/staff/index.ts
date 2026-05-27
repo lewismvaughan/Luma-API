@@ -129,16 +129,23 @@ export class StaffService {
   /**
    * Set catalog access for a user
    */
-  async setUserCatalogs(userId: string, catalogIds: string[]): Promise<void> {
+  async setUserCatalogs(userId: string, catalogIds: string[], organizationId: string): Promise<void> {
     // Remove existing catalog assignments
     await query(`DELETE FROM user_catalogs WHERE user_id = $1`, [userId]);
 
-    // Add new catalog assignments
+    // Add new catalog assignments — only catalogs owned by this organization
+    // (prevents injecting another org's catalog id into the assignment table).
     if (catalogIds.length > 0) {
-      const values = catalogIds.map((_, i) => `($1, $${i + 2})`).join(', ');
+      const owned = await query<{ id: string }>(
+        `SELECT id FROM catalogs WHERE id = ANY($1) AND organization_id = $2`,
+        [catalogIds, organizationId]
+      );
+      const ownedIds = owned.map(r => r.id);
+      if (ownedIds.length === 0) return;
+      const values = ownedIds.map((_, i) => `($1, $${i + 2})`).join(', ');
       await query(
         `INSERT INTO user_catalogs (user_id, catalog_id) VALUES ${values}`,
-        [userId, ...catalogIds]
+        [userId, ...ownedIds]
       );
     }
   }
@@ -265,7 +272,7 @@ export class StaffService {
 
     // Set catalog access for user role
     if (params.role === 'user' && params.catalogIds && params.catalogIds.length > 0) {
-      await this.setUserCatalogs(user.id, params.catalogIds);
+      await this.setUserCatalogs(user.id, params.catalogIds, params.organizationId);
     }
 
     // Send invite email
@@ -499,7 +506,7 @@ export class StaffService {
 
       // If changing to admin, clear catalog assignments (admins have access to all)
       if (updates.role === 'admin') {
-        await this.setUserCatalogs(staffId, []);
+        await this.setUserCatalogs(staffId, [], organizationId);
       }
     }
 
@@ -509,7 +516,7 @@ export class StaffService {
       if (updates.catalogIds.length === 0) {
         throw new Error('At least one catalog must be assigned for user role');
       }
-      await this.setUserCatalogs(staffId, updates.catalogIds);
+      await this.setUserCatalogs(staffId, updates.catalogIds, organizationId);
     }
 
     if (setClauses.length === 0 && updates.catalogIds === undefined) {

@@ -52,11 +52,12 @@ const listErrorsRoute = createRoute({
 });
 
 app.openapi(listErrorsRoute, async (c) => {
-  await requireOwner(c.req.header('Authorization'));
+  const payload = await requireOwner(c.req.header('Authorization'));
 
   const { limit, offset, resolved, startDate, endDate } = c.req.valid('query');
 
   const result = await getErrors({
+    organizationId: payload.organizationId,
     limit: limit || 50,
     offset: offset || 0,
     resolved: resolved ? resolved === 'true' : undefined,
@@ -94,10 +95,10 @@ const unresolvedErrorsRoute = createRoute({
 });
 
 app.openapi(unresolvedErrorsRoute, async (c) => {
-  await requireOwner(c.req.header('Authorization'));
+  const payload = await requireOwner(c.req.header('Authorization'));
 
   const { limit, offset } = c.req.valid('query');
-  const errors = await getUnresolvedErrors(limit || 50, offset || 0);
+  const errors = await getUnresolvedErrors(payload.organizationId, limit || 50, offset || 0);
 
   return c.json({ errors });
 });
@@ -141,7 +142,7 @@ app.openapi(resolveErrorRoute, async (c) => {
   const { id } = c.req.valid('param');
   const { notes } = c.req.valid('json');
 
-  await resolveError(id, payload.userId, notes);
+  await resolveError(id, payload.userId, payload.organizationId, notes);
 
   return c.json({ success: true });
 });
@@ -178,10 +179,10 @@ const cleanupErrorsRoute = createRoute({
 });
 
 app.openapi(cleanupErrorsRoute, async (c) => {
-  await requireOwner(c.req.header('Authorization'));
+  const payload = await requireOwner(c.req.header('Authorization'));
   const { daysOld } = c.req.valid('json');
 
-  const deleted = await deleteOldResolvedErrors(daysOld);
+  const deleted = await deleteOldResolvedErrors(payload.organizationId, daysOld);
 
   return c.json({ deleted: deleted || 0 });
 });
