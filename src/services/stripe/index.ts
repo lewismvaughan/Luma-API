@@ -97,24 +97,35 @@ export class StripeService {
 
   async createConnectedAccount(params: CreateConnectedAccountParams) {
     try {
-      const account = await stripe.accounts.create({
-        type: params.type || 'express',
+      const accountType = params.type || 'standard';
+
+      const createParams: Stripe.AccountCreateParams = {
+        type: accountType,
         country: params.country || 'US',
         email: params.email,
         business_type: params.business_type,
-        capabilities: params.capabilities || {
+        metadata: params.metadata,
+      };
+
+      // Standard accounts manage their own capabilities and payout schedule via
+      // their own Stripe dashboard — the platform cannot set these and Stripe
+      // rejects the request if we try. Only request capabilities / control the
+      // payout schedule for express & custom accounts.
+      if (accountType !== 'standard') {
+        createParams.capabilities = params.capabilities || {
           card_payments: { requested: true },
           transfers: { requested: true },
-        },
-        settings: {
+        };
+        createParams.settings = {
           payouts: {
             schedule: {
               interval: 'manual',
             },
           },
-        },
-        metadata: params.metadata,
-      });
+        };
+      }
+
+      const account = await stripe.accounts.create(createParams);
 
       logger.info('Connected account created', {
         accountId: account.id,

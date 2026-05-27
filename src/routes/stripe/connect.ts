@@ -103,7 +103,7 @@ async function syncAccountFromStripe(account: Stripe.Account, organizationId: st
   const queryParams = [
     organizationId,
     account.id,
-    account.type || 'express',
+    account.type || 'standard',
     account.charges_enabled,
     account.payouts_enabled,
     account.details_submitted,
@@ -466,14 +466,10 @@ app.openapi(createConnectedAccountRoute, async (c) => {
 
     // Create new Stripe connected account
     const account = await stripeService.createConnectedAccount({
-      type: 'express',
+      type: 'standard',
       country: body.country || 'US',
       email: userRows[0].email,
       business_type: body.businessType,
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
-      },
       metadata: {
         organization_id: payload.organizationId,
         user_id: payload.userId,
