@@ -487,6 +487,11 @@ export class AuthService {
       `UPDATE users SET last_login = NOW() WHERE id = $1`,
       [userId]
     );
+    // CLAUDE.md mandates invalidating BOTH user cache keys on every users
+    // update. last_login feeds /auth/me, so a stale value would persist 1h.
+    const u = await query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]);
+    await cacheService.del(CacheKeys.user(userId));
+    if (u[0]?.email) await cacheService.del(CacheKeys.userByEmail(u[0].email));
   }
 
   async createPasswordResetToken(email: string): Promise<string | null> {

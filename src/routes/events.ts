@@ -942,29 +942,31 @@ app.openapi(purchaseTicketsRoute, async (c) => {
       chargeId = (paymentIntent.latest_charge as string) || null;
     }
 
-    // Create tickets
-    const tickets: any[] = [];
+    // Create tickets — single round-trip via unnest of the per-ticket qr codes
+    // (everything else is the same per purchase). Was N round-trips for a
+    // 6-pack; now 1.
     return await transaction(async (client) => {
-      for (let i = 0; i < body.quantity; i++) {
-        const qrCode = generateQrCode();
-        const result = await client.query(
-          `INSERT INTO tickets (
-            ticket_tier_id, event_id, organization_id,
-            customer_email, customer_name, qr_code, status,
-            stripe_payment_intent_id, stripe_charge_id,
-            amount_paid, platform_fee_cents, customer_ip
-          ) VALUES ($1,$2,$3,$4,$5,$6,'valid',$7,$8,$9,$10,$11)
-          RETURNING *`,
-          [
-            body.tierId, event.id, event.organization_id,
-            customerEmail, body.customerName, qrCode,
-            paymentIntentId, chargeId,
-            unitPrice, lumaFeePerTicketCents,
-            customerIp,
-          ]
-        );
-        tickets.push(result.rows[0]);
-      }
+      const qrCodes = Array.from({ length: body.quantity }, () => generateQrCode());
+      const insertResult = await client.query(
+        `INSERT INTO tickets (
+           ticket_tier_id, event_id, organization_id,
+           customer_email, customer_name, qr_code, status,
+           stripe_payment_intent_id, stripe_charge_id,
+           amount_paid, platform_fee_cents, customer_ip
+         )
+         SELECT $1, $2, $3, $4, $5, qr, 'valid', $6, $7, $8, $9, $10
+         FROM unnest($11::text[]) AS qr
+         RETURNING *`,
+        [
+          body.tierId, event.id, event.organization_id,
+          customerEmail, body.customerName,
+          paymentIntentId, chargeId,
+          unitPrice, lumaFeePerTicketCents,
+          customerIp,
+          qrCodes,
+        ]
+      );
+      const tickets: any[] = insertResult.rows;
 
       // Delete the lock
       await client.query('DELETE FROM ticket_locks WHERE session_id = $1', [body.sessionId]);
@@ -1477,7 +1479,7 @@ const recentScansRoute = createRoute({
 app.openapi(recentScansRoute, async (c) => {
   const { eventId } = c.req.param();
   const deviceId = c.req.query('deviceId');
-  const limit = parseInt(c.req.query('limit') || '20');
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20') || 20));
 
   try {
     const payload = await verifyAuth(c.req.header('Authorization'));
@@ -2084,7 +2086,14 @@ app.openapi(listTicketsRoute, async (c) => {
       p++;
     }
 
-    sql += ' ORDER BY t.purchased_at DESC';
+    // Cap + paginate. A successful event has thousands of tickets; the prior
+    // unbounded query held a PG connection while streaming the whole table.
+    const limitRaw = c.req.query('limit');
+    const offsetRaw = c.req.query('offset');
+    const limitNum = Math.min(200, Math.max(1, parseInt(limitRaw || '100', 10) || 100));
+    const offsetNum = Math.max(0, parseInt(offsetRaw || '0', 10) || 0);
+    params.push(limitNum, offsetNum);
+    sql += ` ORDER BY t.purchased_at DESC LIMIT $${p} OFFSET $${p + 1}`;
 
     const rows = await query(sql, params);
     return c.json(rows.map(formatTicket));

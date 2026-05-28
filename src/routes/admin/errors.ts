@@ -58,8 +58,8 @@ app.openapi(listErrorsRoute, async (c) => {
 
   const result = await getErrors({
     organizationId: payload.organizationId,
-    limit: limit || 50,
-    offset: offset || 0,
+    limit: Math.min(200, Math.max(1, limit || 50)),
+    offset: Math.max(0, offset || 0),
     resolved: resolved ? resolved === 'true' : undefined,
     startDate: startDate ? new Date(startDate) : undefined,
     endDate: endDate ? new Date(endDate) : undefined,
@@ -98,7 +98,11 @@ app.openapi(unresolvedErrorsRoute, async (c) => {
   const payload = await requireOwner(c.req.header('Authorization'));
 
   const { limit, offset } = c.req.valid('query');
-  const errors = await getUnresolvedErrors(payload.organizationId, limit || 50, offset || 0);
+  const errors = await getUnresolvedErrors(
+    payload.organizationId,
+    Math.min(200, Math.max(1, limit || 50)),
+    Math.max(0, offset || 0)
+  );
 
   return c.json({ errors });
 });

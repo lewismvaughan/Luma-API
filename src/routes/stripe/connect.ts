@@ -1178,8 +1178,10 @@ app.openapi(listTransactionsRoute, async (c) => {
     const amountMax = queryParams.amount_max ? parseInt(queryParams.amount_max) : null;
     const sortBy = queryParams.sort_by || 'date';
     const sortOrder = queryParams.sort_order || 'desc';
-    const requestedLimit = queryParams.limit ? parseInt(queryParams.limit) : 25;
-    const requestedOffset = queryParams.offset ? parseInt(queryParams.offset) : 0;
+    // Cap page size — each item in this list also fans out to Stripe API
+    // calls below, so an uncapped limit can burn the Stripe per-account quota.
+    const requestedLimit = Math.min(50, Math.max(1, (queryParams.limit ? parseInt(queryParams.limit) : 25) || 25));
+    const requestedOffset = Math.max(0, (queryParams.offset ? parseInt(queryParams.offset) : 0) || 0);
     const statusFilter = queryParams.status || 'all';
     const startingAfter = queryParams.starting_after || null;
 

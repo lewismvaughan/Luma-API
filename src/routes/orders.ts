@@ -454,12 +454,15 @@ app.openapi(listHeldOrdersRoute, async (c) => {
       whereClause += ` AND device_id = $${params.length}`;
     }
 
+    // Cap the list — operators rarely need more than the most recent few; an
+    // unbounded scan held a PG connection while streaming the whole table.
     const rows = await query(
       `SELECT o.*,
               (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
        FROM orders o
        WHERE ${whereClause}
-       ORDER BY held_at DESC`,
+       ORDER BY held_at DESC
+       LIMIT 100`,
       params
     );
 
@@ -644,6 +647,11 @@ app.openapi(listOrdersRoute, async (c) => {
     const orgCurrency = await getOrgCurrency(payload.organizationId);
     const { limit, offset, status, catalogId, customerId, userId, deviceId } = c.req.query();
 
+    // Cap page size; uncapped `limit` was a DoS surface (limit=10M holds a
+    // PG connection while streaming the whole table).
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit || '50', 10) || 50));
+    const offsetNum = Math.max(0, parseInt(offset || '0', 10) || 0);
+
     let whereClause = 'organization_id = $1';
     const params: any[] = [payload.organizationId];
 
@@ -678,7 +686,7 @@ app.openapi(listOrdersRoute, async (c) => {
     );
     const total = parseInt((countResult[0] as any).total, 10);
 
-    params.push(parseInt(limit, 10), parseInt(offset, 10));
+    params.push(limitNum, offsetNum);
     const rows = await query(
       `SELECT * FROM orders
        WHERE ${whereClause}

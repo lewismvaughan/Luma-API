@@ -1,9 +1,11 @@
 import { query } from '../../db';
 import { logger } from '../../utils/logger';
 import { runLeaderTask } from './leader-lock';
+import { deleteOldResolvedErrors } from '../error-logging';
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
+const SIX_HOURS = 6 * 60 * 60 * 1000;
 
 const intervals: ReturnType<typeof setInterval>[] = [];
 
@@ -65,6 +67,21 @@ async function cleanPasswordResetTokens() {
   }
 }
 
+// --- Resolved API errors: every 6 hours ---
+// api_errors rows are large (full request body+headers); without GC the table
+// grows unboundedly. Delete resolved errors older than 30 days cluster-wide.
+
+async function cleanResolvedApiErrors() {
+  try {
+    const deleted = await deleteOldResolvedErrors(null, 30);
+    if (deleted && deleted > 0) {
+      logger.info('Cleaned resolved api_errors', { count: deleted });
+    }
+  } catch (error) {
+    logger.error('Failed to clean resolved api_errors', { error });
+  }
+}
+
 // --- Start / Stop ---
 
 export function startScheduledCleanups() {
@@ -72,22 +89,26 @@ export function startScheduledCleanups() {
   const ticketLocksTick = () => runLeaderTask('cleanup:ticket-locks', 300, cleanExpiredTicketLocks);
   const sessionsTick = () => runLeaderTask('cleanup:sessions', 600, cleanExpiredSessions);
   const resetTokensTick = () => runLeaderTask('cleanup:reset-tokens', 600, cleanPasswordResetTokens);
+  const apiErrorsTick = () => runLeaderTask('cleanup:api-errors', 1800, cleanResolvedApiErrors);
 
   // Run all once immediately on startup (still leader-guarded)
   ticketLocksTick();
   sessionsTick();
   resetTokensTick();
+  apiErrorsTick();
 
   intervals.push(
     setInterval(ticketLocksTick, FIFTEEN_MINUTES),
     setInterval(sessionsTick, ONE_HOUR),
     setInterval(resetTokensTick, ONE_HOUR),
+    setInterval(apiErrorsTick, SIX_HOURS),
   );
 
   logger.info('Scheduled cleanups started', {
     ticketLocks: '15m',
     sessions: '1h',
     passwordResetTokens: '1h',
+    apiErrors: '6h',
   });
 }
 

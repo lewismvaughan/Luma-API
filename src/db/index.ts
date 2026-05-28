@@ -9,7 +9,9 @@ export const pool = new Pool({
   // Postgres max_connections (default 100) — e.g. 2 replicas × 25 = 50.
   max: config.database.poolMax,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  // 2s was too tight: under a brief burst, the 26th request would 500 in 2s
+  // instead of waiting a moment for a pool slot to free.
+  connectionTimeoutMillis: 8000,
 });
 
 pool.on('error', (err) => {

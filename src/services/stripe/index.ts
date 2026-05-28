@@ -497,28 +497,9 @@ export class StripeService {
         listParams.starting_after = params.starting_after;
       }
 
-      // First, let's get ALL invoices to see what we have
-      const allInvoices = await stripe.invoices.list({
-        customer: customerId,
-        limit: 100,
-      });
-
-      logger.info('ALL customer invoices for debugging', {
-        customerId,
-        totalInvoices: allInvoices.data.length,
-        invoiceDetails: allInvoices.data.map(inv => ({
-          id: inv.id,
-          status: inv.status,
-          created: new Date(inv.created * 1000).toISOString(),
-          amount_paid: inv.amount_paid,
-          amount_due: inv.amount_due,
-          paid: (inv as any).paid,
-          number: inv.number,
-          hosted_invoice_url: inv.hosted_invoice_url,
-        }))
-      });
-
-      // Now get the filtered list
+      // Filtered list — the prior debug call (stripe.invoices.list without
+      // filters, just to log them) was production code doubling the Stripe
+      // rate-limit consumption on every customer-invoices fetch. Removed.
       if (params.status) {
         listParams.status = params.status;
       }

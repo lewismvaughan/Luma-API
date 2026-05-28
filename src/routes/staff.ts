@@ -666,8 +666,10 @@ app.openapi(deleteStaffAvatarRoute, async (c) => {
       [id]
     );
 
-    // Invalidate cache
+    // Invalidate BOTH user cache keys (CLAUDE.md mandate). The sibling upload
+    // route already does both; the delete path was missing userByEmail.
     await cacheService.del(CacheKeys.user(id));
+    if (staff.email) await cacheService.del(CacheKeys.userByEmail(staff.email));
 
     logger.info('Staff avatar deleted', {
       staffId: id,

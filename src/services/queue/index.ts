@@ -10,8 +10,6 @@ const connection = {
 export enum QueueName {
   PAYMENT_PROCESSING = 'payment-processing',
   EMAIL_NOTIFICATIONS = 'email-notifications',
-  WEBHOOK_DELIVERY = 'webhook-delivery',
-  REPORT_GENERATION = 'report-generation',
   PAYOUT_PROCESSING = 'payout-processing',
 }
 
@@ -27,18 +25,6 @@ export interface JobData {
     data: Record<string, any>;
     vendorBranding?: { organizationName: string; brandingLogoUrl: string | null };
     currency?: string;
-  };
-  [QueueName.WEBHOOK_DELIVERY]: {
-    url: string;
-    event: string;
-    data: Record<string, any>;
-    retryCount?: number;
-  };
-  [QueueName.REPORT_GENERATION]: {
-    type: 'event_summary' | 'daily_sales' | 'tip_report';
-    eventId: string;
-    startDate: string;
-    endDate: string;
   };
   [QueueName.PAYOUT_PROCESSING]: {
     eventId: string;
@@ -90,8 +76,10 @@ export class QueueService {
     }
 
     const job = await queue.add(queueName, data, {
-      removeOnComplete: true,
-      removeOnFail: false,
+      // Bound retention so Redis doesn't grow unboundedly with completed/failed
+      // jobs. Failed jobs are kept long enough to investigate (14d, 5k cap).
+      removeOnComplete: { age: 24 * 3600, count: 1000 },
+      removeOnFail: { age: 14 * 24 * 3600, count: 5000 },
       attempts: options?.attempts || 3,
       backoff: options?.backoff || {
         type: 'exponential',

@@ -171,14 +171,27 @@ export async function resolveError(errorId: string, resolvedBy: string, organiza
 /**
  * Delete old resolved errors (cleanup job)
  */
-export async function deleteOldResolvedErrors(organizationId: string, daysOld = 30) {
+export async function deleteOldResolvedErrors(organizationId: string | null, daysOld = 30) {
+  // Pass null from the scheduled cleanup to GC every tenant's old resolved
+  // errors at once; pass an organizationId from the admin route so a tenant
+  // owner can only clean their own org's history.
+  if (organizationId) {
+    const result = await pool.query(
+      `DELETE FROM api_errors
+       WHERE resolved = true
+       AND organization_id = $2
+       AND created_at < NOW() - INTERVAL '1 day' * $1
+       RETURNING id`,
+      [daysOld, organizationId]
+    );
+    return result.rowCount;
+  }
   const result = await pool.query(
     `DELETE FROM api_errors
-    WHERE resolved = true
-    AND organization_id = $2
-    AND created_at < NOW() - INTERVAL '1 day' * $1
-    RETURNING id`,
-    [daysOld, organizationId]
+     WHERE resolved = true
+     AND created_at < NOW() - INTERVAL '1 day' * $1
+     RETURNING id`,
+    [daysOld]
   );
   return result.rowCount;
 }

@@ -64,6 +64,9 @@ async function sendDeletionReminders() {
           `UPDATE users SET deletion_reminder_sent = true WHERE id = $1`,
           [user.id]
         );
+        // Invalidate both user cache keys (CLAUDE.md requirement on every users UPDATE).
+        await cacheService.del(CacheKeys.user(user.id));
+        if (user.email) await cacheService.del(CacheKeys.userByEmail(user.email));
 
         logger.info('Sent deletion reminder email', {
           userId: user.id,

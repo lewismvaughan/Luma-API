@@ -63,9 +63,9 @@ app.openapi(listCustomersRoute, async (c) => {
 
     const { search, limit, offset } = c.req.query();
 
-    // Parse with defaults
-    const limitNum = parseInt(limit || '50', 10);
-    const offsetNum = parseInt(offset || '0', 10);
+    // Cap the page size so a caller can't request a million-row scan.
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit || '50', 10) || 50));
+    const offsetNum = Math.max(0, parseInt(offset || '0', 10) || 0);
 
     let whereClause = 'WHERE organization_id = $1';
     const params: any[] = [payload.organizationId];
@@ -84,44 +84,18 @@ app.openapi(listCustomersRoute, async (c) => {
     );
     const total = parseInt(countResult[0]?.count || '0', 10);
 
-    // Get customers with unified stats across all transaction types
+    // Read the rollup columns directly. They're kept current on every
+    // order/preorder/ticket/invoice insert by the upsert path + stats triggers,
+    // so the previous UNION-ALL-and-LOWER() aggregation was redundant and was
+    // the worst single query in the codebase. This now uses the
+    // (organization_id, last_order_at DESC) index for O(limit) reads.
     params.push(limitNum, offsetNum);
-    const customers = await query<Customer & {
-      computed_total_orders: string;
-      computed_total_spent: string;
-      computed_last_activity: Date | null;
-    }>(
-      `WITH all_transactions AS (
-        SELECT customer_email, total_amount AS amount, created_at AS txn_date
-        FROM orders WHERE organization_id = $1 AND status IN ('completed', 'processing')
-        UNION ALL
-        SELECT customer_email, total_amount, created_at
-        FROM preorders WHERE organization_id = $1 AND status NOT IN ('cancelled')
-        UNION ALL
-        SELECT customer_email, amount_paid, purchased_at
-        FROM tickets WHERE organization_id = $1 AND status NOT IN ('cancelled', 'refunded')
-        UNION ALL
-        SELECT customer_email, amount_paid, paid_at
-        FROM invoices WHERE organization_id = $1 AND status IN ('paid', 'refunded')
-      ),
-      customer_stats AS (
-        SELECT LOWER(customer_email) AS email_lower,
-          COUNT(*) AS total_transactions,
-          COALESCE(SUM(amount), 0) AS total_spent,
-          MAX(txn_date) AS last_activity
-        FROM all_transactions
-        WHERE customer_email IS NOT NULL
-        GROUP BY LOWER(customer_email)
-      )
-      SELECT c.*,
-        COALESCE(s.total_transactions, 0) AS computed_total_orders,
-        COALESCE(s.total_spent, 0) AS computed_total_spent,
-        s.last_activity AS computed_last_activity
-      FROM customers c
-      LEFT JOIN customer_stats s ON LOWER(c.email) = s.email_lower
-      ${whereClause}
-      ORDER BY s.last_activity DESC NULLS LAST, c.created_at DESC
-      LIMIT $${paramCount} OFFSET $${paramCount + 1}`,
+    const customers = await query<Customer>(
+      `SELECT id, email, name, phone, total_orders, total_spent, last_order_at, created_at
+         FROM customers
+         ${whereClause}
+         ORDER BY last_order_at DESC NULLS LAST, created_at DESC
+         LIMIT $${paramCount} OFFSET $${paramCount + 1}`,
       params
     );
 
@@ -131,10 +105,10 @@ app.openapi(listCustomersRoute, async (c) => {
         email: customer.email,
         name: customer.name,
         phone: customer.phone,
-        totalOrders: parseInt(String(customer.computed_total_orders), 10),
-        totalSpent: parseFloat(String(customer.computed_total_spent)),
-        lastOrderAt: customer.computed_last_activity
-          ? new Date(customer.computed_last_activity).toISOString()
+        totalOrders: customer.total_orders || 0,
+        totalSpent: parseFloat(String(customer.total_spent || 0)),
+        lastOrderAt: customer.last_order_at
+          ? new Date(customer.last_order_at).toISOString()
           : null,
         createdAt: customer.created_at.toISOString(),
       })),
